@@ -39,15 +39,14 @@ async function getModel(apiKey) {
 }
 
 // ストリーミング段落翻訳
-async function streamParagraph(text, index, apiKey, tabId) {
-  const model = await getModel(apiKey);
+async function streamParagraph(paragraphText, index, model, apiKey, tabId) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
 
   const requestBody = {
-    contents: [{ parts: [{ text: `${PROMPT}\n\n${text}` }] }],
+    contents: [{ parts: [{ text: `${PROMPT}\n\n${paragraphText}` }] }],
     generationConfig: {
       temperature: 0.1,
-      maxOutputTokens: 512,
+      maxOutputTokens: 1024,
       topP: 0.8
     },
     safetySettings: [
@@ -112,7 +111,7 @@ async function streamParagraph(text, index, apiKey, tabId) {
       done: true
     });
 
-    return result || text;
+    return result || paragraphText;
 
   } catch (error) {
     chrome.tabs.sendMessage(tabId, {
@@ -127,6 +126,7 @@ async function streamParagraph(text, index, apiKey, tabId) {
 
 // 並列翻訳制御（最大2並列）
 async function translateTexts(texts, apiKey, tabId) {
+  const model = await getModel(apiKey);
   const maxConcurrency = 2;
   const results = new Array(texts.length);
 
@@ -138,7 +138,7 @@ async function translateTexts(texts, apiKey, tabId) {
 
       while (attempts < 2) {
         try {
-          const result = await streamParagraph(text, globalIndex, apiKey, tabId);
+          const result = await streamParagraph(text, globalIndex, model, apiKey, tabId);
           return { index: globalIndex, result, success: true };
         } catch (error) {
           attempts++;
@@ -167,27 +167,6 @@ async function translateTexts(texts, apiKey, tabId) {
   }
 
   return { success: true, translatedTexts: results };
-}
-
-// SSEチャンクパース（予備、現在は直接パース）
-function parseSSEChunk(uint8Array) {
-  try {
-    const text = new TextDecoder().decode(uint8Array);
-    const lines = text.split('\n');
-
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const jsonStr = line.slice(6);
-        if (jsonStr === '[DONE]') return null;
-
-        const data = JSON.parse(jsonStr);
-        return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
-      }
-    }
-    return null;
-  } catch (error) {
-    return null;
-  }
 }
 
 // APIキー取得
