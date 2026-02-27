@@ -1,0 +1,395 @@
+/* Popup styles for AI Web Novel Translator */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  width: 300px;
+  min-height: 400px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #333;
+  overflow: hidden;
+}
+
+.popup-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: white;
+  border-radius: 12px;
+  margin: 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+/* Header */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px 12px;
+  background: linear-gradient(135deg, #4285f4 0%, #34a853 100%);
+  color: white;
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.title .icon {
+  font-size: 20px;
+}
+
+.title h1 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+
+.status-dot.ready {
+  background-color: #34a853;
+}
+
+.status-dot.success {
+  background-color: #0f9d58;
+}
+
+.status-dot.warning {
+  background-color: #ff9800;
+}
+
+.status-dot.error {
+  background-color: #ea4335;
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+/* Content */
+.content {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.section {
+  display: block;
+}
+
+.section.hidden {
+  display: none;
+}
+
+/* Status Display */
+.status-display {
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+#statusText {
+  font-size: 14px;
+  color: #5f6368;
+  font-weight: 500;
+}
+
+/* Buttons */
+.button-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none;
+  font-family: inherit;
+}
+
+.button.primary {
+  background: linear-gradient(135deg, #4285f4 0%, #34a853 100%);
+  color: white;
+  box-shadow: 0 2px 4px rgba(66, 133, 244, 0.3);
+}
+
+.button.primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(66, 133, 244, 0.4);
+}
+
+.button.secondary {
+  background: #f8f9fa;
+  color: #5f6368;
+  border: 1px solid #dadce0;
+}
+
+.button.secondary:hover:not(:disabled) {
+  background: #f1f3f4;
+}
+
+.button.text {
+  background: transparent;
+  color: #4285f4;
+  padding: 8px 12px;
+}
+
+.button.text:hover {
+  background: rgba(66, 133, 244, 0.1);
+}
+
+.button.small {
+  font-size: 12px;
+  padding: 6px 12px;
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+.button.loading {
+  position: relative;
+  color: transparent;
+}
+
+.button.loading::after {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 2px solid transparent;
+  border-top: 2px solid currentColor;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  color: white;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.button-icon {
+  font-size: 16px;
+}
+
+/* Progress Section */
+.progress-section {
+  margin: 16px 0;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 4px;
+  background: #e8eaed;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4285f4 0%, #34a853 100%);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+  width: 0%;
+}
+
+.progress-text {
+  text-align: center;
+  font-size: 12px;
+  color: #5f6368;
+}
+
+/* Translation Info */
+.translation-info {
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 16px 0;
+}
+
+.info-item {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.info-item:last-child {
+  margin-bottom: 0;
+}
+
+.info-label {
+  font-size: 12px;
+  color: #5f6368;
+}
+
+.info-value {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.info-value.success {
+  color: #34a853;
+}
+
+/* Messages */
+.message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  margin-bottom: 16px;
+  padding: 16px;
+  border-radius: 8px;
+  background: #f8f9fa;
+}
+
+.message.error {
+  background: #fce8e6;
+  color: #d93025;
+}
+
+.message-icon {
+  font-size: 32px;
+  margin-bottom: 8px;
+}
+
+.message p {
+  font-size: 14px;
+  margin: 0;
+  line-height: 1.4;
+}
+
+/* Action Buttons */
+.action-buttons {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+/* Footer */
+.footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  background: #f8f9fa;
+  border-top: 1px solid #e8eaed;
+  font-size: 12px;
+}
+
+.footer-link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #5f6368;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.footer-link:hover {
+  color: #4285f4;
+}
+
+.footer-icon {
+  font-size: 14px;
+}
+
+.version {
+  color: #9aa0a6;
+  font-size: 11px;
+}
+
+/* Error Section */
+.error-section {
+  text-align: center;
+}
+
+/* Responsive adjustments */
+@media (max-width: 320px) {
+  body {
+    width: 280px;
+  }
+
+  .popup-container {
+    margin: 4px;
+  }
+
+  .content {
+    padding: 16px;
+  }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .popup-container {
+    background: #2d2d2d;
+    color: #e8eaed;
+  }
+
+  .content {
+    background: #2d2d2d;
+  }
+
+  .message {
+    background: #3c4043;
+    color: #e8eaed;
+  }
+
+  .message.error {
+    background: #3d2c2b;
+    color: #f28b82;
+  }
+
+  .button.secondary {
+    background: #3c4043;
+    color: #e8eaed;
+    border-color: #5f6368;
+  }
+
+  .footer {
+    background: #3c4043;
+    border-color: #5f6368;
+  }
+
+  .translation-info {
+    background: #3c4043;
+  }
+
+  #statusText {
+    color: #9aa0a6;
+  }
+}

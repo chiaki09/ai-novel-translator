@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Web Novel Translator - Settings</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 600px;
+      margin: 40px auto;
+      padding: 20px;
+      background-color: #f8f9fa;
+    }
+
+    .container {
+      background: white;
+      border-radius: 12px;
+      padding: 30px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);
+    }
+
+    h1 {
+      color: #333;
+      margin-bottom: 20px;
+      font-size: 24px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 500;
+      color: #555;
+    }
+
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e1e5e9;
+      border-radius: 8px;
+      font-size: 14px;
+      box-sizing: border-box;
+      transition: border-color 0.2s;
+    }
+
+    input[type="text"]:focus, input[type="password"]:focus {
+      outline: none;
+      border-color: #4285f4;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    button {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+
+    .primary {
+      background-color: #4285f4;
+      color: white;
+    }
+
+    .primary:hover {
+      background-color: #3367d6;
+    }
+
+    .secondary {
+      background-color: #f8f9fa;
+      color: #5f6368;
+      border: 1px solid #dadce0;
+    }
+
+    .secondary:hover {
+      background-color: #f1f3f4;
+    }
+
+    .status {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+
+    .status.success {
+      background-color: #e8f5e8;
+      color: #137333;
+    }
+
+    .status.error {
+      background-color: #fce8e6;
+      color: #d93025;
+    }
+
+    .status.info {
+      background-color: #e8f0fe;
+      color: #1967d2;
+    }
+
+    .help-text {
+      font-size: 12px;
+      color: #666;
+      margin-top: 4px;
+    }
+
+    .api-setup {
+      background-color: #f8f9fa;
+      padding: 16px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+
+    .api-setup h3 {
+      margin: 0 0 8px 0;
+      color: #333;
+      font-size: 16px;
+    }
+
+    .api-setup p {
+      margin: 4px 0;
+      font-size: 14px;
+      color: #666;
+    }
+
+    .api-setup a {
+      color: #4285f4;
+      text-decoration: none;
+    }
+
+    .api-setup a:hover {
+      text-decoration: underline;
+    }
+
+    .troubleshooting-section {
+      background-color: #fff3cd;
+      border: 1px solid #ffeaa7;
+      border-radius: 8px;
+      padding: 20px;
+      margin-top: 20px;
+    }
+
+    .troubleshooting-section h3 {
+      margin: 0 0 16px 0;
+      color: #856404;
+      font-size: 18px;
+    }
+
+    .troubleshoot-item {
+      margin-bottom: 16px;
+      padding: 12px;
+      background-color: #fff;
+      border-radius: 6px;
+      border-left: 4px solid #ffc107;
+    }
+
+    .troubleshoot-item h4 {
+      margin: 0 0 8px 0;
+      color: #333;
+      font-size: 14px;
+    }
+
+    .troubleshoot-item ol {
+      margin: 0;
+      padding-left: 20px;
+      font-size: 13px;
+      color: #555;
+    }
+
+    .troubleshoot-item ol li {
+      margin-bottom: 4px;
+      line-height: 1.4;
+    }
+
+    .troubleshoot-item a {
+      color: #4285f4;
+      text-decoration: none;
+    }
+
+    .troubleshoot-item a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🤖 AI Web Novel Translator</h1>
+
+    <div class="api-setup">
+      <h3>📋 Gemini APIキーの取得方法</h3>
+      <p>1. <a href="https://aistudio.google.com" target="_blank">Google AI Studio</a> にアクセス</p>
+      <p>2. 「Get API Key」→「Create API Key」をクリック</p>
+      <p>3. 取得したAPIキーを下記に入力して保存</p>
+    </div>
+
+    <div class="form-group">
+      <label for="apiKey">Gemini API Key</label>
+      <input type="password" id="apiKey" placeholder="AIza...で始まる文字列を入力">
+      <div class="help-text">APIキーはお使いのブラウザにのみ保存され、外部に送信されません</div>
+    </div>
+
+    <div class="button-group">
+      <button id="saveButton" class="primary">保存</button>
+      <button id="testButton" class="secondary">接続テスト</button>
+      <button id="generateKeyButton" class="secondary">🔑 新しいAPIキーを生成</button>
+    </div>
+
+    <div id="status" class="status" style="display: none;"></div>
+
+    <!-- トラブルシューティングセクション -->
+    <div id="troubleshootingSection" class="troubleshooting-section" style="display: none;">
+      <h3>🔧 トラブルシューティング</h3>
+
+      <div class="troubleshoot-item">
+        <h4>❌ "API key not valid" エラーの場合</h4>
+        <ol>
+          <li><a href="https://aistudio.google.com/apikey" target="_blank">Google AI Studio</a> で新しいAPIキーを生成</li>
+          <li>プロジェクトでGemini APIが有効化されていることを確認</li>
+          <li>APIキーの使用制限・クォータを確認</li>
+          <li>古いAPIキーが無効化されていないか確認</li>
+        </ol>
+      </div>
+
+      <div class="troubleshoot-item">
+        <h4>🌍 地域制限・利用可能性の確認</h4>
+        <ol>
+          <li><a href="https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/overview" target="_blank">Gemini API地域可用性</a>を確認</li>
+          <li>VPN使用時は米国・EU地域に設定</li>
+          <li>Google Cloud Consoleでプロジェクト設定を確認</li>
+        </ol>
+      </div>
+
+      <div class="troubleshoot-item">
+        <h4>💳 支払い・クォータの確認</h4>
+        <ol>
+          <li><a href="https://console.cloud.google.com/billing" target="_blank">Google Cloud 請求</a>でアカウント状況を確認</li>
+          <li><a href="https://console.cloud.google.com/iam-admin/quotas" target="_blank">クォータページ</a>でGemini API制限を確認</li>
+          <li>無料枠を超過していないか確認</li>
+        </ol>
+      </div>
+
+      <button id="hideTroubleshootingButton" class="secondary small">ガイドを閉じる</button>
+    </div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

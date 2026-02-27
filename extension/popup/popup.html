@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Web Novel Translator</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- ヘッダー -->
+    <div class="header">
+      <div class="title">
+        <span class="icon">🤖</span>
+        <h1>AI翻訳</h1>
+      </div>
+      <div class="status-indicator" id="statusIndicator">
+        <span class="status-dot"></span>
+      </div>
+    </div>
+
+    <!-- メインコンテンツ -->
+    <div class="content">
+      <!-- APIキー未設定時の表示 -->
+      <div id="noApiKeySection" class="section hidden">
+        <div class="message">
+          <div class="message-icon">⚠️</div>
+          <p>APIキーが設定されていません</p>
+        </div>
+        <button id="openSettingsButton" class="button secondary">
+          設定を開く
+        </button>
+      </div>
+
+      <!-- メインコントロール -->
+      <div id="mainSection" class="section">
+        <!-- 翻訳状態の表示 -->
+        <div id="statusDisplay" class="status-display">
+          <span id="statusText">準備完了</span>
+        </div>
+
+        <!-- メインボタン -->
+        <div class="button-group">
+          <button id="translateButton" class="button primary">
+            <span class="button-icon">🌐</span>
+            <span class="button-text">ページを翻訳</span>
+          </button>
+
+          <button id="restoreButton" class="button secondary hidden">
+            <span class="button-icon">↩️</span>
+            <span class="button-text">原文に戻す</span>
+          </button>
+        </div>
+
+        <!-- 進捗表示 -->
+        <div id="progressSection" class="progress-section hidden">
+          <div class="progress-bar">
+            <div id="progressFill" class="progress-fill"></div>
+          </div>
+          <div id="progressText" class="progress-text">翻訳準備中...</div>
+        </div>
+
+        <!-- 翻訳済み情報 -->
+        <div id="translationInfo" class="translation-info hidden">
+          <div class="info-item">
+            <span class="info-label">状態:</span>
+            <span class="info-value success">翻訳完了</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">キャッシュ:</span>
+            <span id="cacheStatus" class="info-value">利用可能</span>
+          </div>
+        </div>
+
+        <!-- アクションボタン -->
+        <div class="action-buttons">
+          <button id="clearCacheButton" class="button text small">
+            キャッシュをクリア
+          </button>
+        </div>
+      </div>
+
+      <!-- エラー表示 -->
+      <div id="errorSection" class="section error-section hidden">
+        <div class="message error">
+          <div class="message-icon">❌</div>
+          <p id="errorMessage">エラーが発生しました</p>
+        </div>
+        <button id="retryButton" class="button secondary">
+          再試行
+        </button>
+      </div>
+    </div>
+
+    <!-- フッター -->
+    <div class="footer">
+      <a href="#" id="settingsLink" class="footer-link">
+        <span class="footer-icon">⚙️</span>
+        設定
+      </a>
+      <div class="version">v1.0.0</div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
