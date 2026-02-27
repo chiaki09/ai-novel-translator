@@ -179,26 +179,10 @@ async function translateTexts(texts, tabId) {
       }
     }
 
-    console.log(`🚀 OPTIMIZED RELIABLE translation: ${texts.length} paragraphs using ${CURRENT_MODEL}`);
+    console.log(`🚀 GOOGLE-TRANSLATE-SPEED translation: ${texts.length} paragraphs using ${CURRENT_MODEL}`);
 
-    // 確実性重視の翻訳戦略
-    if (texts.length > 16) {
-      return await translateInParallel(texts, apiKey, tabId);
-    } else if (texts.length > 8) {
-      // 中規模も小並列化
-      return await translateInSmallParallel(texts, apiKey, tabId);
-    }
-
-    // 小規模は確実な単バッチ処理
-    const result = await translateBatchReliable(texts, apiKey, tabId);
-
-    // 品質チェック
-    if (result.success && hasQuickRepetition(result.translatedTexts)) {
-      console.warn('⚠️ Repetition detected, fixing...');
-      return await retryTranslationOnce(texts, apiKey, tabId);
-    }
-
-    return result;
+    // Google翻訳並み高速戦略：全て個別並列処理
+    return await translateIndividuallyParallel(texts, apiKey, tabId);
 
   } catch (error) {
     console.error('Translation error:', error);
@@ -207,12 +191,120 @@ async function translateTexts(texts, tabId) {
 }
 
 
-// 🚀 並列化バッチ処理（確実性重視）
-async function translateInParallel(texts, apiKey, tabId = null) {
-  const batchSize = 8; // 確実性重視の小バッチサイズ
+// 🚀 Google翻訳並み個別並列処理（超高速）
+async function translateIndividuallyParallel(texts, apiKey, tabId = null) {
+  const maxConcurrency = 4; // Google翻訳並みの並列数（15RPM制限内で最適）
+  const retryAttempts = 2; // 失敗時のリトライ回数
 
-  // 並列数を2に固定（Gemini無料枠の15RPM制限対応）
-  const maxConcurrency = 2;
+  console.log(`⚡ INDIVIDUAL PARALLEL translation: ${texts.length} paragraphs, ${maxConcurrency} concurrent`);
+
+  const allResults = [];
+  const failedIndices = [];
+
+  // 段落インデックスの配列を作成
+  const indices = Array.from({length: texts.length}, (_, i) => i);
+
+  // 並列処理
+  for (let i = 0; i < indices.length; i += maxConcurrency) {
+    const concurrentIndices = indices.slice(i, i + maxConcurrency);
+
+    console.log(`⚡ Processing batch ${Math.floor(i/maxConcurrency) + 1}/${Math.ceil(indices.length/maxConcurrency)}: indices ${concurrentIndices[0]}-${concurrentIndices[concurrentIndices.length-1]}`);
+
+    const promises = concurrentIndices.map(async (index) => {
+      const text = texts[index];
+      let attempts = 0;
+
+      while (attempts < retryAttempts) {
+        try {
+          const result = await translateSingleFast(text, apiKey);
+
+          if (result && result.length > 0) {
+            // 即座にcontent scriptに送信（リアルタイム表示）
+            if (tabId) {
+              try {
+                chrome.tabs.sendMessage(tabId, {
+                  action: 'translationProgress',
+                  startIndex: index,
+                  translations: [result]
+                });
+              } catch (error) {
+                console.warn(`Failed to send progress for index ${index}:`, error);
+              }
+            }
+
+            console.log(`✅ Translated paragraph ${index + 1}: "${result.substring(0, 50)}..."`);
+            return { index, result, success: true };
+          } else {
+            throw new Error('Empty translation result');
+          }
+        } catch (error) {
+          attempts++;
+          console.warn(`⚠️ Translation failed for paragraph ${index + 1}, attempt ${attempts}/${retryAttempts}:`, error.message);
+
+          if (attempts < retryAttempts) {
+            // 短い待機後にリトライ
+            await new Promise(resolve => setTimeout(resolve, 200 * attempts));
+          }
+        }
+      }
+
+      // 全てのリトライが失敗した場合
+      console.error(`❌ Failed to translate paragraph ${index + 1} after ${retryAttempts} attempts`);
+      return { index, result: `[翻訳失敗] ${text.substring(0, 100)}...`, success: false };
+    });
+
+    try {
+      const batchResults = await Promise.all(promises);
+
+      // 結果を正しい順序で配列に格納
+      for (const { index, result, success } of batchResults) {
+        allResults[index] = result;
+        if (!success) {
+          failedIndices.push(index);
+        }
+      }
+
+      console.log(`⚡ Batch completed: ${batchResults.filter(r => r.success).length}/${batchResults.length} successful`);
+
+    } catch (error) {
+      console.error('❌ Batch processing error:', error);
+
+      // エラー時は失敗テキストで埋める
+      for (const index of concurrentIndices) {
+        if (allResults[index] === undefined) {
+          allResults[index] = `[翻訳失敗] ${texts[index].substring(0, 100)}...`;
+          failedIndices.push(index);
+        }
+      }
+    }
+
+    // バッチ間の短い待機（レート制限対策）
+    if (i + maxConcurrency < indices.length) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+
+  // 結果の検証と調整
+  const finalResults = [];
+  for (let i = 0; i < texts.length; i++) {
+    finalResults[i] = allResults[i] || `[翻訳失敗] ${texts[i].substring(0, 100)}...`;
+  }
+
+  const successRate = Math.round(((texts.length - failedIndices.length) / texts.length) * 100);
+  console.log(`⚡ INDIVIDUAL PARALLEL COMPLETE: ${texts.length - failedIndices.length}/${texts.length} successful (${successRate}%)`);
+
+  if (failedIndices.length > 0) {
+    console.warn(`⚠️ Failed paragraphs: ${failedIndices.join(', ')}`);
+  }
+
+  return { success: true, translatedTexts: finalResults };
+}
+
+// 🚀 並列化バッチ処理（確実性重視）- 非推奨、個別処理に置き換え
+async function translateInParallel(texts, apiKey, tabId = null) {
+  // 個別並列処理にリダイレクト
+  return await translateIndividuallyParallel(texts, apiKey, tabId);
+}
 
   console.log(`🚀 PARALLEL translation: ${texts.length} texts, batch size ${batchSize}, max concurrent ${maxConcurrency}`);
 
@@ -290,83 +382,30 @@ async function translateInParallel(texts, apiKey, tabId = null) {
   return { success: true, translatedTexts: allResults };
 }
 
-// ⚡ 中規模テキスト用の小並列化処理
+// ⚡ 中規模テキスト用の処理 - 個別並列処理にリダイレクト
 async function translateInSmallParallel(texts, apiKey, tabId = null) {
-  const halfSize = Math.ceil(texts.length / 2);
-
-  console.log(`⚡ SMALL PARALLEL translation: ${texts.length} texts in 2 parallel batches`);
-
-  const batch1 = texts.slice(0, halfSize);
-  const batch2 = texts.slice(halfSize);
-
-  console.log(`📦 Batch 1: ${batch1.length} texts, Batch 2: ${batch2.length} texts`);
-
-  try {
-    const startTime = performance.now();
-
-    // 2つのバッチを並列実行
-    const [result1, result2] = await Promise.all([
-      translateBatchReliable(batch1, apiKey, tabId, 0),
-      translateBatchReliable(batch2, apiKey, tabId, halfSize)
-    ]);
-
-    const executionTime = performance.now() - startTime;
-    console.log(`⚡ Small parallel execution completed in ${executionTime.toFixed(2)}ms`);
-
-    const allResults = [];
-
-    // 結果1を処理
-    if (result1.success) {
-      allResults.push(...result1.translatedTexts);
-      console.log(`✅ Batch 1 success: ${result1.translatedTexts.length} translations`);
-    } else {
-      console.warn(`⚠️ Batch 1 failed, using fallback`);
-      allResults.push(...batch1.map(text => `[翻訳失敗] ${text.substring(0, 100)}...`)); // フォールバック
-    }
-
-    // 結果2を処理
-    if (result2.success) {
-      allResults.push(...result2.translatedTexts);
-      console.log(`✅ Batch 2 success: ${result2.translatedTexts.length} translations`);
-    } else {
-      console.warn(`⚠️ Batch 2 failed, using fallback`);
-      allResults.push(...batch2.map(text => `[翻訳失敗] ${text.substring(0, 100)}...`)); // フォールバック
-    }
-
-    console.log(`⚡ SMALL PARALLEL COMPLETE: ${allResults.length}/${texts.length} translations`);
-    return { success: true, translatedTexts: allResults };
-
-  } catch (error) {
-    console.error(`❌ Small parallel execution failed:`, error);
-
-    // フォールバック：順次処理
-    console.log(`🔄 Falling back to sequential processing...`);
-    return await translateBatchReliable(texts, apiKey, tabId, 0);
-  }
+  console.log(`⚡ SMALL PARALLEL redirecting to individual parallel processing`);
+  return await translateIndividuallyParallel(texts, apiKey, tabId);
 }
 
-// 確実性重視のバッチ処理
+// バッチ処理（レガシー、個別並列処理にリダイレクト）
 async function translateBatchReliable(texts, apiKey, tabId = null, startIndex = 0) {
-  console.log(`🛡️ RELIABLE BATCH: ${texts.length} texts`);
+  console.log(`🛡️ RELIABLE BATCH redirecting to individual parallel processing`);
+  return await translateIndividuallyParallel(texts, apiKey, tabId);
+}
 
-  const combinedText = texts.join('\n\n###TRANSLATE_SEPARATOR###\n\n');
-  const estimatedTokens = combinedText.length * 0.25;
-
-  // 小バッチ用の最適化トークン制限
-  const safeMaxTokens = Math.min(8192, Math.max(2048, Math.round(estimatedTokens * 2.0)));
-  console.log(`🛡️ Optimized token limit: ${safeMaxTokens} (estimated: ${Math.round(estimatedTokens)}, ratio: 2.0x)`);
-
+// 🚀 高速単一翻訳（Google翻訳並み）
+async function translateSingleFast(text, apiKey) {
   const requestBody = {
     contents: [{
       parts: [{
-        text: SYSTEM_PROMPT + '\n\n' + combinedText
+        text: `Translate to Japanese:\n\n${text}`
       }]
     }],
     generationConfig: {
-      temperature: 0.2, // 少し高めで自然さ向上
-      maxOutputTokens: safeMaxTokens,
-      topP: 0.9,
-      topK: 50
+      temperature: 0.1,
+      maxOutputTokens: 512, // 短縮で高速化
+      topP: 0.8
     },
     safetySettings: [
       { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
@@ -376,145 +415,43 @@ async function translateBatchReliable(texts, apiKey, tabId = null, startIndex = 
     ]
   };
 
-  try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CURRENT_MODEL}:generateContent?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
-    });
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CURRENT_MODEL}:generateContent?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody)
+  });
 
-    if (!response.ok) {
-      const data = await response.json();
-      console.error(`❌ API Error ${response.status}:`, data);
-      return { success: false, error: data.error?.message || `API Error ${response.status}` };
-    }
-
-    const data = await response.json();
-
-    if (!data.candidates || data.candidates.length === 0) {
-      console.error(`❌ No candidates returned`);
-      return { success: false, error: 'No translation candidates' };
-    }
-
-    const translatedText = data.candidates[0].content.parts[0].text.trim();
-    console.log(`📝 Reliable translation length: ${translatedText.length} chars`);
-
-    // 強化された分割処理
-    let translatedTexts = [];
-
-    // 主要分割方法: 新しい区切り文字
-    const primarySplit = translatedText.split(/\n\n###TRANSLATE_SEPARATOR###\n\n/);
-    translatedTexts = primarySplit.map(t => t.trim())
-      .filter(t => t.length > 0)
-      .filter(t => !t.includes('###TRANSLATE_SEPARATOR###')); // 残留区切り文字を除去
-
-    console.log(`📊 Primary split result: ${translatedTexts.length} parts`);
-
-    // 分割結果が少なすぎる場合の多段階フォールバック
-    if (translatedTexts.length < texts.length * 0.6) {
-      console.warn(`⚠️ Primary split insufficient (${translatedTexts.length}/${texts.length}), trying fallback methods`);
-
-      // フォールバック1: ダブル改行
-      const fallback1 = translatedText.split(/\n\s*\n/).map(t => t.trim()).filter(t => t.length > 10);
-      if (fallback1.length > translatedTexts.length) {
-        translatedTexts = fallback1;
-        console.log(`✅ Fallback 1 better: ${translatedTexts.length} parts (double newline)`);
-      }
-
-      // フォールバック2: 段落番号を検出
-      if (translatedTexts.length < texts.length * 0.6) {
-        const fallback2 = translatedText.split(/(?=\d+\.|第\d+|Chapter|\n[A-Z]|\n「)/).map(t => t.trim()).filter(t => t.length > 5);
-        if (fallback2.length > translatedTexts.length) {
-          translatedTexts = fallback2;
-          console.log(`✅ Fallback 2 better: ${translatedTexts.length} parts (paragraph detection)`);
-        }
-      }
-    }
-
-    // 区切り文字の残留を完全除去
-    translatedTexts = translatedTexts.map(text =>
-      text.replace(/###TRANSLATE_SEPARATOR###/g, '')
-          .replace(/---SECTION---/g, '')
-          .replace(/^[\s\n]+|[\s\n]+$/g, '')
-    ).filter(t => t.length > 0);
-
-    // 完全性チェック
-    const completionRate = translatedTexts.length / texts.length;
-    console.log(`📊 Completion rate: ${Math.round(completionRate * 100)}% (${translatedTexts.length}/${texts.length})`);
-
-    // 結果調整
-    while (translatedTexts.length < texts.length) {
-      const missingIndex = translatedTexts.length;
-      const fallback = `[未翻訳: ${texts[missingIndex]?.substring(0, 100)}...]`;
-      translatedTexts.push(fallback);
-    }
-
-    if (translatedTexts.length > texts.length) {
-      translatedTexts.splice(texts.length);
-    }
-
-    // 完了したバッチの進捗をcontent scriptに通知
-    if (tabId && translatedTexts.length > 0) {
-      try {
-        chrome.tabs.sendMessage(tabId, {
-          action: 'translationProgress',
-          startIndex: startIndex,
-          translations: translatedTexts
-        });
-        console.log(`📤 Sent progress update for batch: ${startIndex}-${startIndex + translatedTexts.length - 1}`);
-      } catch (error) {
-        console.warn('Failed to send progress update:', error);
-      }
-    }
-
-    return { success: true, translatedTexts };
-
-  } catch (error) {
-    console.error(`❌ Network error in reliable batch:`, error);
-    return { success: false, error: error.message };
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(`API Error ${response.status}: ${errorData.error?.message || 'Unknown error'}`);
   }
+
+  const data = await response.json();
+
+  if (!data.candidates || data.candidates.length === 0) {
+    throw new Error('No translation candidates returned');
+  }
+
+  if (data.candidates[0].finishReason === 'SAFETY') {
+    throw new Error('Content blocked by safety filter');
+  }
+
+  if (!data.candidates[0].content || !data.candidates[0].content.parts || data.candidates[0].content.parts.length === 0) {
+    throw new Error('Empty translation content');
+  }
+
+  const translation = data.candidates[0].content.parts[0].text.trim();
+
+  if (!translation || translation.length === 0) {
+    throw new Error('Empty translation result');
+  }
+
+  return translation;
 }
 
-// 単一テキストの翻訳（最終手段）
+// 単一テキストの翻訳（レガシー関数、後方互換性のため残す）
 async function translateSingle(text, apiKey, tabId = null) {
-  console.log(`🎯 Single translation: ${text.substring(0, 50)}...`);
-
-  const requestBody = {
-    contents: [{
-      parts: [{
-        text: `以下の英語テキストを自然な日本語に翻訳してください：\n\n${text}`
-      }]
-    }],
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 1024,
-      topP: 0.9
-    }
-  };
-
-  try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CURRENT_MODEL}:generateContent?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      if (data.candidates && data.candidates[0]) {
-        const translation = data.candidates[0].content.parts[0].text.trim();
-        console.log(`✅ Single translation success`);
-        return translation;
-      }
-    }
-
-    console.warn(`⚠️ Single translation failed, using original`);
-    return text;
-
-  } catch (error) {
-    console.error(`❌ Single translation error:`, error);
-    return text;
-  }
+  return await translateSingleFast(text, apiKey);
 }
 
 
@@ -529,69 +466,10 @@ function hasQuickRepetition(translatedTexts) {
   return false;
 }
 
-// 1回のみの再試行（無限ループ防止）
+// 再試行処理（レガシー、個別並列処理にリダイレクト）
 async function retryTranslationOnce(texts, apiKey, tabId = null) {
-  console.log(`🔄 Retrying translation for ${texts.length} texts (once only)`);
-
-  // より保守的な設定で再試行
-  const combinedText = texts.join('\n\n###TRANSLATE_SEPARATOR###\n\n');
-  const requestBody = {
-    contents: [{
-      parts: [{
-        text: `以下の英語テキストを日本語に翻訳してください。繰り返しは絶対禁止です：\n\n${combinedText}`
-      }]
-    }],
-    generationConfig: {
-      temperature: 0.1,
-      maxOutputTokens: 16384,
-      topP: 0.8
-    }
-  };
-
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CURRENT_MODEL}:generateContent?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(requestBody)
-  });
-
-  if (response.ok) {
-    const data = await response.json();
-    if (data.candidates && data.candidates[0]) {
-      const translatedText = data.candidates[0].content.parts[0].text.trim();
-      let translatedTexts = translatedText.split(/\n\n###TRANSLATE_SEPARATOR###\n\n/)
-        .map(t => t.trim())
-        .filter(t => t.length > 0)
-        .filter(t => !t.includes('###TRANSLATE_SEPARATOR###'));
-
-      // 結果調整
-      while (translatedTexts.length < texts.length) {
-        translatedTexts.push(texts[translatedTexts.length]);
-      }
-      if (translatedTexts.length > texts.length) {
-        translatedTexts.splice(texts.length);
-      }
-
-      // 再試行成功時の進捗通知
-      if (tabId && translatedTexts.length > 0) {
-        try {
-          chrome.tabs.sendMessage(tabId, {
-            action: 'translationProgress',
-            startIndex: 0,
-            translations: translatedTexts
-          });
-          console.log(`📤 Sent retry progress update: ${translatedTexts.length} translations`);
-        } catch (error) {
-          console.warn('Failed to send retry progress update:', error);
-        }
-      }
-
-      return { success: true, translatedTexts };
-    }
-  }
-
-  // 再試行も失敗した場合は翻訳失敗テキストを返す
-  console.warn('Retry failed, returning fallback texts');
-  return { success: true, translatedTexts: texts.map(text => `[翻訳失敗] ${text.substring(0, 100)}...`) };
+  console.log(`🔄 Retry redirecting to individual parallel processing`);
+  return await translateIndividuallyParallel(texts, apiKey, tabId);
 }
 
 
