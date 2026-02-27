@@ -86,6 +86,11 @@ class NovelTranslator {
           sendResponse({ success: true });
           break;
 
+        case 'translationProgress':
+          this.applyProgressTranslation(message.startIndex, message.translations);
+          sendResponse({ success: true });
+          break;
+
         default:
           sendResponse({ success: false, error: 'Unknown action' });
       }
@@ -212,22 +217,47 @@ class NovelTranslator {
         throw new Error(result?.error || '翻訳に失敗しました');
       }
 
-      // Phase 5: Apply Translation
-      console.log('🔍 Phase 5: Applying translation...');
+      // Phase 5: Apply Translation (check if already applied by real-time updates)
+      console.log('🔍 Phase 5: Checking translation completion...');
       const applyStart = performance.now();
 
-      this.applyTranslation({
-        elements: textElements,
-        originalTexts: textArray,
-        translatedTexts: result.translatedTexts
-      });
+      // リアルタイム表示で既に適用済みか確認
+      const translatedCount = Array.from(this.translatedElements.keys()).length;
+
+      if (translatedCount < textElements.length) {
+        // 一部のみ翻訳済み、または未翻訳の場合は残りを適用
+        console.log(`🔄 Applying remaining translations: ${translatedCount}/${textElements.length} already done`);
+        this.applyTranslation({
+          elements: textElements,
+          originalTexts: textArray,
+          translatedTexts: result.translatedTexts
+        });
+      } else {
+        console.log(`✅ All translations already applied via real-time updates`);
+      }
 
       const applyTime = performance.now() - applyStart;
-      console.log(`⏱️ Apply translation: ${applyTime.toFixed(2)}ms`);
+      console.log(`⏱️ Apply translation check: ${applyTime.toFixed(2)}ms`);
 
       const totalTime = performance.now() - startTime;
       console.log(`🎯 TOTAL TIME: ${totalTime.toFixed(2)}ms (${(totalTime/1000).toFixed(1)}s)`);
       console.log(`✅ Completed: ${result.translatedTexts.length} paragraphs translated`);
+
+      // Phase 6: Save to cache
+      try {
+        await chrome.runtime.sendMessage({
+          action: 'saveCache',
+          url: this.currentUrl,
+          data: {
+            elements: textElements,
+            originalTexts: textArray,
+            translatedTexts: result.translatedTexts
+          }
+        });
+        console.log('💾 Translation cached successfully');
+      } catch (cacheError) {
+        console.warn('⚠️ Failed to cache translation:', cacheError);
+      }
 
     } catch (error) {
       console.error('❌ Translation failed:', error);
@@ -414,6 +444,50 @@ class NovelTranslator {
     this.currentTexts = [];
     this.isTranslated = false;
     console.log('Fast restore complete');
+  }
+
+  // リアルタイム進捗翻訳適用
+  applyProgressTranslation(startIndex, translations) {
+    if (!this.currentElements || !this.currentTexts) {
+      console.warn('No current translation context available');
+      return;
+    }
+
+    console.log(`📤 Applying progress translation: index ${startIndex}, count ${translations.length}`);
+
+    for (let i = 0; i < translations.length; i++) {
+      const elementIndex = startIndex + i;
+
+      if (elementIndex >= this.currentElements.length) {
+        console.warn(`Element index ${elementIndex} out of range (${this.currentElements.length})`);
+        continue;
+      }
+
+      const element = this.currentElements[elementIndex];
+      const originalText = this.currentTexts[elementIndex];
+      const translatedText = translations[i];
+
+      // 元のテキストを保存（まだ保存されていない場合）
+      if (!this.translatedElements.has(element)) {
+        this.translatedElements.set(element, element.textContent);
+      }
+
+      try {
+        // 翻訳を適用
+        this.applySimpleTranslation(element, translatedText);
+        console.log(`✅ Applied translation ${elementIndex + 1}/${this.currentElements.length}: "${translatedText.substring(0, 50)}..."`);
+      } catch (error) {
+        console.error(`Failed to apply translation for element ${elementIndex}:`, error);
+      }
+    }
+
+    // 完了状況を確認
+    const translatedCount = Array.from(this.translatedElements.keys()).length;
+    if (translatedCount === this.currentElements.length) {
+      console.log(`🎉 All ${translatedCount} paragraphs translated and applied!`);
+      this.isTranslated = true;
+      this.isTranslating = false;
+    }
   }
 
 }

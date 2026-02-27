@@ -2,6 +2,16 @@
 
 // Gemini API設定
 let CURRENT_MODEL = null; // 利用可能なモデルをキャッシュ
+
+// 起動時にキャッシュされたモデルを読み込み
+chrome.runtime.onStartup.addListener(async () => {
+  await loadCachedModel();
+});
+
+// Service Worker起動時にもモデルを読み込み
+(async () => {
+  await loadCachedModel();
+})();
 const SYSTEM_PROMPT = `プロ翻訳者として以下の英語テキストを日本語に翻訳してください。
 
 【重要ルール】
@@ -122,7 +132,7 @@ async function handleMessage(message, sender, sendResponse) {
 }
 
 // 翻訳機能
-async function translateTexts(texts) {
+async function translateTexts(texts, tabId) {
   if (!Array.isArray(texts) || texts.length === 0) {
     return { success: false, error: '翻訳対象のテキストがありません' };
   }
@@ -163,6 +173,9 @@ async function translateTexts(texts) {
           success: false,
           error: `利用可能なGeminiモデルが見つかりませんでした。\n${detailError}`
         };
+      } else {
+        // モデルが見つかったらキャッシュに保存
+        await saveCachedModel(CURRENT_MODEL);
       }
     }
 
@@ -170,19 +183,19 @@ async function translateTexts(texts) {
 
     // 確実性重視の翻訳戦略
     if (texts.length > 16) {
-      return await translateInParallel(texts, apiKey);
+      return await translateInParallel(texts, apiKey, tabId);
     } else if (texts.length > 8) {
       // 中規模も小並列化
-      return await translateInSmallParallel(texts, apiKey);
+      return await translateInSmallParallel(texts, apiKey, tabId);
     }
 
     // 小規模は確実な単バッチ処理
-    const result = await translateBatchReliable(texts, apiKey);
+    const result = await translateBatchReliable(texts, apiKey, tabId);
 
     // 品質チェック
     if (result.success && hasQuickRepetition(result.translatedTexts)) {
       console.warn('⚠️ Repetition detected, fixing...');
-      return await retryTranslationOnce(texts, apiKey);
+      return await retryTranslationOnce(texts, apiKey, tabId);
     }
 
     return result;
@@ -193,68 +206,13 @@ async function translateTexts(texts) {
   }
 }
 
-// 完全翻訳のための最適バッチ処理
-async function translateInOptimalBatches(texts, apiKey) {
-  const batchSize = 20; // 完全性重視の安全なサイズ
-  const results = [];
-
-  console.log(`🎯 OPTIMAL BATCH translation: ${texts.length} texts, safe batch size ${batchSize}`);
-
-  for (let i = 0; i < texts.length; i += batchSize) {
-    const batch = texts.slice(i, i + batchSize);
-    const batchNum = Math.floor(i / batchSize) + 1;
-    const totalBatches = Math.ceil(texts.length / batchSize);
-
-    console.log(`🔄 Batch ${batchNum}/${totalBatches}: processing ${batch.length} paragraphs`);
-
-    const result = await translateBatchReliable(batch, apiKey);
-
-    if (result.success) {
-      console.log(`✅ Batch ${batchNum} success: ${result.translatedTexts.length} translations`);
-      results.push(...result.translatedTexts);
-    } else {
-      console.error(`❌ Batch ${batchNum} failed, retrying with smaller chunks...`);
-
-      // 失敗時は10段落ずつに分割
-      const smallBatchSize = 10;
-      for (let j = 0; j < batch.length; j += smallBatchSize) {
-        const smallBatch = batch.slice(j, j + smallBatchSize);
-        const smallResult = await translateBatchReliable(smallBatch, apiKey);
-
-        if (smallResult.success) {
-          results.push(...smallResult.translatedTexts);
-        } else {
-          console.error(`❌ Small batch also failed, using individual processing`);
-          // 最終手段：個別処理
-          for (const text of smallBatch) {
-            const individual = await translateSingle(text, apiKey);
-            results.push(individual);
-          }
-        }
-
-        // 小バッチ間待機削除（高速化のため）
-      }
-    }
-
-    // バッチ間待機削除（並列化のため）
-    // 待機時間削除で10-15%高速化
-  }
-
-  console.log(`🎯 OPTIMAL BATCH COMPLETE: ${results.length}/${texts.length} translations (${Math.round(results.length/texts.length*100)}%)`);
-  return { success: true, translatedTexts: results };
-}
 
 // 🚀 並列化バッチ処理（確実性重視）
-async function translateInParallel(texts, apiKey) {
+async function translateInParallel(texts, apiKey, tabId = null) {
   const batchSize = 8; // 確実性重視の小バッチサイズ
 
-  // テキスト数に応じて並列数を動的調整
-  let maxConcurrency = 2; // デフォルト
-  if (texts.length > 40) {
-    maxConcurrency = 3; // 大量テキストは3並列
-  } else if (texts.length > 24) {
-    maxConcurrency = 2; // 中量テキストは2並列
-  }
+  // 並列数を2に固定（Gemini無料枠の15RPM制限対応）
+  const maxConcurrency = 2;
 
   console.log(`🚀 PARALLEL translation: ${texts.length} texts, batch size ${batchSize}, max concurrent ${maxConcurrency}`);
 
@@ -282,7 +240,7 @@ async function translateInParallel(texts, apiKey) {
     // 並列実行
     const promises = concurrentBatches.map(async (batch) => {
       console.log(`🔄 Starting batch ${batch.index + 1}/${batch.total}: ${batch.texts.length} texts`);
-      const result = await translateBatchReliable(batch.texts, apiKey);
+      const result = await translateBatchReliable(batch.texts, apiKey, tabId, batch.index * batchSize);
       console.log(`✅ Completed batch ${batch.index + 1}/${batch.total}: ${result.success ? 'SUCCESS' : 'FAILED'}`);
       return { ...result, batchIndex: batch.index };
     });
@@ -303,7 +261,7 @@ async function translateInParallel(texts, apiKey) {
           console.log(`🔄 Retrying failed batch individually...`);
           const batch = batches[result.batchIndex];
           for (const text of batch.texts) {
-            const individual = await translateSingle(text, apiKey);
+            const individual = await translateSingle(text, apiKey, tabId);
             allResults.push(individual);
           }
         }
@@ -315,12 +273,12 @@ async function translateInParallel(texts, apiKey) {
       // 完全失敗時は順次処理にフォールバック
       console.log(`🔄 Falling back to sequential processing...`);
       for (const batch of concurrentBatches) {
-        const result = await translateBatchReliable(batch.texts, apiKey);
+        const result = await translateBatchReliable(batch.texts, apiKey, tabId, batch.index * batchSize);
         if (result.success) {
           allResults.push(...result.translatedTexts);
         } else {
-          // 最終手段：元テキスト使用
-          allResults.push(...batch.texts);
+          // 最終手段：翻訳失敗表示
+          allResults.push(...batch.texts.map(text => `[翻訳失敗] ${text.substring(0, 100)}...`));
         }
       }
     }
@@ -333,7 +291,7 @@ async function translateInParallel(texts, apiKey) {
 }
 
 // ⚡ 中規模テキスト用の小並列化処理
-async function translateInSmallParallel(texts, apiKey) {
+async function translateInSmallParallel(texts, apiKey, tabId = null) {
   const halfSize = Math.ceil(texts.length / 2);
 
   console.log(`⚡ SMALL PARALLEL translation: ${texts.length} texts in 2 parallel batches`);
@@ -348,8 +306,8 @@ async function translateInSmallParallel(texts, apiKey) {
 
     // 2つのバッチを並列実行
     const [result1, result2] = await Promise.all([
-      translateBatchReliable(batch1, apiKey),
-      translateBatchReliable(batch2, apiKey)
+      translateBatchReliable(batch1, apiKey, tabId, 0),
+      translateBatchReliable(batch2, apiKey, tabId, halfSize)
     ]);
 
     const executionTime = performance.now() - startTime;
@@ -363,7 +321,7 @@ async function translateInSmallParallel(texts, apiKey) {
       console.log(`✅ Batch 1 success: ${result1.translatedTexts.length} translations`);
     } else {
       console.warn(`⚠️ Batch 1 failed, using fallback`);
-      allResults.push(...batch1); // フォールバック
+      allResults.push(...batch1.map(text => `[翻訳失敗] ${text.substring(0, 100)}...`)); // フォールバック
     }
 
     // 結果2を処理
@@ -372,7 +330,7 @@ async function translateInSmallParallel(texts, apiKey) {
       console.log(`✅ Batch 2 success: ${result2.translatedTexts.length} translations`);
     } else {
       console.warn(`⚠️ Batch 2 failed, using fallback`);
-      allResults.push(...batch2); // フォールバック
+      allResults.push(...batch2.map(text => `[翻訳失敗] ${text.substring(0, 100)}...`)); // フォールバック
     }
 
     console.log(`⚡ SMALL PARALLEL COMPLETE: ${allResults.length}/${texts.length} translations`);
@@ -383,12 +341,12 @@ async function translateInSmallParallel(texts, apiKey) {
 
     // フォールバック：順次処理
     console.log(`🔄 Falling back to sequential processing...`);
-    return await translateBatchReliable(texts, apiKey);
+    return await translateBatchReliable(texts, apiKey, tabId, 0);
   }
 }
 
 // 確実性重視のバッチ処理
-async function translateBatchReliable(texts, apiKey) {
+async function translateBatchReliable(texts, apiKey, tabId = null, startIndex = 0) {
   console.log(`🛡️ RELIABLE BATCH: ${texts.length} texts`);
 
   const combinedText = texts.join('\n\n###TRANSLATE_SEPARATOR###\n\n');
@@ -495,6 +453,20 @@ async function translateBatchReliable(texts, apiKey) {
       translatedTexts.splice(texts.length);
     }
 
+    // 完了したバッチの進捗をcontent scriptに通知
+    if (tabId && translatedTexts.length > 0) {
+      try {
+        chrome.tabs.sendMessage(tabId, {
+          action: 'translationProgress',
+          startIndex: startIndex,
+          translations: translatedTexts
+        });
+        console.log(`📤 Sent progress update for batch: ${startIndex}-${startIndex + translatedTexts.length - 1}`);
+      } catch (error) {
+        console.warn('Failed to send progress update:', error);
+      }
+    }
+
     return { success: true, translatedTexts };
 
   } catch (error) {
@@ -504,7 +476,7 @@ async function translateBatchReliable(texts, apiKey) {
 }
 
 // 単一テキストの翻訳（最終手段）
-async function translateSingle(text, apiKey) {
+async function translateSingle(text, apiKey, tabId = null) {
   console.log(`🎯 Single translation: ${text.substring(0, 50)}...`);
 
   const requestBody = {
@@ -545,95 +517,6 @@ async function translateSingle(text, apiKey) {
   }
 }
 
-// デバッグ強化版高速バッチ処理
-async function translateBatchFast(texts, apiKey) {
-  console.log(`⚡ FAST BATCH DEBUG: ${texts.length} texts`);
-
-  // 入力テキストの詳細分析
-  const inputStats = {
-    totalChars: texts.join('').length,
-    avgLength: Math.round(texts.reduce((sum, t) => sum + t.length, 0) / texts.length),
-    samples: texts.slice(0, 3).map(t => t.substring(0, 100))
-  };
-  console.log(`📊 Input stats:`, inputStats);
-
-  const combinedText = texts.join('\n\n###TRANSLATE_SEPARATOR###\n\n'); // 明確な区切り
-  const estimatedTokens = combinedText.length * 0.25; // 大まかなトークン推定
-  console.log(`🎯 Estimated tokens: ${Math.round(estimatedTokens)} (chars: ${combinedText.length})`);
-
-  const requestBody = {
-    contents: [{
-      parts: [{
-        text: SYSTEM_PROMPT + '\n\n' + combinedText
-      }]
-    }],
-    generationConfig: {
-      temperature: 0.1,
-      maxOutputTokens: Math.min(16384, Math.max(8192, Math.round(estimatedTokens * 1.5))), // 動的調整
-      topP: 0.8,
-      topK: 40
-    }
-  };
-
-  console.log(`🚀 API Request: maxTokens=${requestBody.generationConfig.maxOutputTokens}`);
-  const startTime = performance.now();
-
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CURRENT_MODEL}:generateContent?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(requestBody)
-  });
-
-  const apiTime = performance.now() - startTime;
-  console.log(`⏱️ API response time: ${apiTime.toFixed(2)}ms`);
-
-  if (!response.ok) {
-    const data = await response.json();
-    console.error(`❌ API Error ${response.status}:`, data);
-    return { success: false, error: data.error?.message || 'API Error' };
-  }
-
-  const data = await response.json();
-  console.log(`📥 API Response stats:`, {
-    hasCandidate: !!data.candidates?.[0],
-    responseLength: data.candidates?.[0]?.content?.parts?.[0]?.text?.length || 0
-  });
-
-  if (!data.candidates || data.candidates.length === 0) {
-    console.error(`❌ No candidates in response:`, data);
-    return { success: false, error: 'No candidates returned' };
-  }
-
-  const translatedText = data.candidates[0].content.parts[0].text.trim();
-  console.log(`📝 Raw translation length: ${translatedText.length} chars`);
-  console.log(`📝 First 200 chars: "${translatedText.substring(0, 200)}..."`);
-  console.log(`📝 Last 200 chars: "...${translatedText.substring(translatedText.length - 200)}"`);
-
-  // 複数の分割方法を試す
-  let translatedTexts = translatedText.split(/\n\n---SECTION---\n\n/).map(t => t.trim()).filter(t => t.length > 0);
-  console.log(`✂️ Split by SECTION: ${translatedTexts.length} parts`);
-
-  // フォールバック分割
-  if (translatedTexts.length < texts.length * 0.5) {
-    translatedTexts = translatedText.split(/\n\n/).map(t => t.trim()).filter(t => t.length > 0);
-    console.log(`✂️ Fallback split by double newline: ${translatedTexts.length} parts`);
-  }
-
-  // 結果調整の詳細ログ
-  const originalLength = translatedTexts.length;
-  while (translatedTexts.length < texts.length) {
-    const missingIndex = translatedTexts.length;
-    translatedTexts.push(`[翻訳未完了: ${texts[missingIndex]?.substring(0, 50)}...]`);
-  }
-  if (translatedTexts.length > texts.length) {
-    translatedTexts.splice(texts.length);
-  }
-
-  console.log(`📊 FINAL RESULT: ${originalLength}→${translatedTexts.length} (target: ${texts.length})`);
-  console.log(`✅ Success rate: ${Math.round((originalLength / texts.length) * 100)}%`);
-
-  return { success: true, translatedTexts };
-}
 
 // 軽量な繰り返し検出
 function hasQuickRepetition(translatedTexts) {
@@ -647,7 +530,7 @@ function hasQuickRepetition(translatedTexts) {
 }
 
 // 1回のみの再試行（無限ループ防止）
-async function retryTranslationOnce(texts, apiKey) {
+async function retryTranslationOnce(texts, apiKey, tabId = null) {
   console.log(`🔄 Retrying translation for ${texts.length} texts (once only)`);
 
   // より保守的な設定で再試行
@@ -688,117 +571,30 @@ async function retryTranslationOnce(texts, apiKey) {
         translatedTexts.splice(texts.length);
       }
 
+      // 再試行成功時の進捗通知
+      if (tabId && translatedTexts.length > 0) {
+        try {
+          chrome.tabs.sendMessage(tabId, {
+            action: 'translationProgress',
+            startIndex: 0,
+            translations: translatedTexts
+          });
+          console.log(`📤 Sent retry progress update: ${translatedTexts.length} translations`);
+        } catch (error) {
+          console.warn('Failed to send retry progress update:', error);
+        }
+      }
+
       return { success: true, translatedTexts };
     }
   }
 
-  // 再試行も失敗した場合は元テキストを返す
-  console.warn('Retry failed, returning original texts');
-  return { success: true, translatedTexts: texts };
+  // 再試行も失敗した場合は翻訳失敗テキストを返す
+  console.warn('Retry failed, returning fallback texts');
+  return { success: true, translatedTexts: texts.map(text => `[翻訳失敗] ${text.substring(0, 100)}...`) };
 }
 
-// バッチ翻訳（分割処理）
-async function translateInBatches(texts, apiKey) {
-  const results = [];
-  const batchSize = Math.max(1, Math.floor(texts.length / 3)); // 3つのバッチに分割
 
-  for (let i = 0; i < texts.length; i += batchSize) {
-    const batch = texts.slice(i, i + batchSize);
-    console.log(`Translating batch ${Math.floor(i / batchSize) + 1}: ${batch.length} texts`);
-
-    const result = await translateBatch(batch, apiKey);
-    if (!result.success) {
-      return result; // エラーがあれば即座に返す
-    }
-
-    results.push(...result.translatedTexts);
-
-    // API制限待機削除（並列化のため）
-  }
-
-  return { success: true, translatedTexts: results };
-}
-
-// 単一バッチの翻訳
-async function translateBatch(texts, apiKey) {
-  const combinedText = texts.join('\n\n###TRANSLATE_SEPARATOR###\n\n');
-  const requestBody = {
-    contents: [{
-      parts: [{
-        text: SYSTEM_PROMPT + '\n\n' + combinedText
-      }]
-    }],
-    generationConfig: {
-      temperature: 0.1,
-      maxOutputTokens: 16384,  // 出力制限を2倍に拡大
-      topP: 0.8,
-      topK: 40
-    },
-    safetySettings: [
-      { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-      { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-      { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-      { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
-    ]
-  };
-
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${CURRENT_MODEL}:generateContent?key=${apiKey}`;
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(requestBody)
-  });
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    let errorMessage = 'API error occurred';
-    if (data.error) {
-      if (data.error.code === 403) {
-        errorMessage = 'APIキーが無効です。設定画面で正しいAPIキーを入力してください。';
-      } else if (data.error.code === 429) {
-        errorMessage = 'API使用制限に達しました。しばらく待ってから再試行してください。';
-      } else if (data.error.code === 404) {
-        CURRENT_MODEL = null;
-        errorMessage = 'モデルが見つかりません。再試行してください。';
-      } else {
-        errorMessage = data.error.message;
-      }
-    }
-    return { success: false, error: errorMessage };
-  }
-
-  if (!data.candidates || data.candidates.length === 0) {
-    return { success: false, error: '翻訳結果を取得できませんでした' };
-  }
-
-  const translatedText = data.candidates[0].content.parts[0].text.trim();
-  let translatedTexts = translatedText.split(/\n\n###TRANSLATE_SEPARATOR###\n\n/)
-    .map(t => t.trim())
-    .filter(t => t.length > 0)
-    .filter(t => !t.includes('###TRANSLATE_SEPARATOR###')); // 残留区切り文字除去
-
-  // 繰り返しエラーの検出と修正
-  translatedTexts = fixRepetitionErrors(translatedTexts, texts);
-
-  // 結果が極端に少ない場合は失敗とする
-  if (translatedTexts.length < Math.max(1, texts.length * 0.3)) {
-    console.error(`Translation severely incomplete: ${translatedTexts.length}/${texts.length}`);
-    return { success: false, error: 'Translation incomplete' };
-  }
-
-  // 入力と出力の段落数調整
-  while (translatedTexts.length < texts.length) {
-    const missingIndex = translatedTexts.length;
-    translatedTexts.push(texts[missingIndex] || '翻訳できませんでした');
-  }
-
-  if (translatedTexts.length > texts.length) {
-    translatedTexts.splice(texts.length);
-  }
-
-  return { success: true, translatedTexts };
-}
 
 // 繰り返しエラーの検出と修正
 function fixRepetitionErrors(translatedTexts, originalTexts) {
@@ -844,70 +640,6 @@ function fixRepetitionErrors(translatedTexts, originalTexts) {
   return fixedTexts;
 }
 
-// 1つずつ翻訳（バッチ処理失敗時の最後の手段）
-async function translateIndividually(texts, apiKey) {
-  console.log(`Individual translation fallback: ${texts.length} texts`);
-  const results = [];
-
-  for (let i = 0; i < texts.length; i++) {
-    const text = texts[i];
-
-    // 個別処理間待機削除（高速化のため）
-
-    try {
-      const requestBody = {
-        contents: [{
-          parts: [{
-            text: `以下の英語テキストを自然な日本語に翻訳してください。繰り返しや不完全な文は避けてください：\n\n${text}`
-          }]
-        }],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: 2048,
-          topP: 0.9,
-          topK: 40
-        }
-      };
-
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${CURRENT_MODEL}:generateContent?key=${apiKey}`;
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.candidates && data.candidates[0]) {
-          const translated = data.candidates[0].content.parts[0].text.trim();
-
-          // 繰り返しチェック
-          if (translated.includes('彼が彼が') || /(.{2,}?)\1{3,}/.test(translated)) {
-            console.warn(`Repetition in individual translation, using original`);
-            results.push(text);
-          } else {
-            results.push(translated);
-          }
-        } else {
-          results.push(text);
-        }
-      } else {
-        console.warn(`Individual translation failed for paragraph ${i + 1}, using original`);
-        results.push(text);
-      }
-    } catch (error) {
-      console.error(`Error translating paragraph ${i + 1}:`, error);
-      results.push(text);
-    }
-
-    // 進捗表示（簡易）
-    if ((i + 1) % 10 === 0) {
-      console.log(`Individual translation progress: ${i + 1}/${texts.length}`);
-    }
-  }
-
-  return { success: true, translatedTexts: results };
-}
 
 // シンプルなモデル検出（直接テスト）
 async function findAvailableModelSimple(apiKey) {
@@ -972,41 +704,6 @@ async function findAvailableModelSimple(apiKey) {
   return null;
 }
 
-// 利用可能なモデルを検出（複雑版 - バックアップ用）
-async function findAvailableModel(apiKey) {
-  // まずシンプルな方法を試す
-  const simpleResult = await findAvailableModelSimple(apiKey);
-  if (simpleResult) {
-    return simpleResult;
-  }
-
-  // シンプルな方法で見つからない場合はmodels.list APIを試す
-  try {
-    console.log('Trying models.list API...');
-    const listResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
-
-    if (listResponse.ok) {
-      const listData = await listResponse.json();
-      console.log('Available models from API:', listData.models?.map(m => m.name));
-
-      if (listData.models && listData.models.length > 0) {
-        for (const model of listData.models) {
-          if (model.supportedGenerationMethods && model.supportedGenerationMethods.includes('generateContent')) {
-            const modelName = model.name.replace('models/', '');
-            console.log('Found model from list:', modelName);
-            return modelName;
-          }
-        }
-      }
-    } else {
-      console.error('models.list API failed:', listResponse.status);
-    }
-  } catch (error) {
-    console.error('Failed to list models:', error);
-  }
-
-  return null;
-}
 
 // 最後の手段：確実に動作する可能性のあるモデル名を試す
 async function tryLastResortModels(apiKey) {
@@ -1106,6 +803,28 @@ async function clearCacheForUrl(url) {
   } catch (error) {
     console.error('Failed to clear cache:', error);
     return false;
+  }
+}
+
+// モデルキャッシュ管理
+async function loadCachedModel() {
+  try {
+    const result = await chrome.storage.local.get(['cachedModel']);
+    if (result.cachedModel) {
+      CURRENT_MODEL = result.cachedModel;
+      console.log('Loaded cached model:', CURRENT_MODEL);
+    }
+  } catch (error) {
+    console.error('Failed to load cached model:', error);
+  }
+}
+
+async function saveCachedModel(model) {
+  try {
+    await chrome.storage.local.set({ cachedModel: model });
+    console.log('Saved model to cache:', model);
+  } catch (error) {
+    console.error('Failed to save cached model:', error);
   }
 }
 

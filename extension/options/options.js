@@ -59,6 +59,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
     try {
       await chrome.storage.local.set({ geminiApiKey: apiKey });
+
+      // APIキー変更時はキャッシュされたモデルをクリア
+      await chrome.storage.local.remove(['cachedModel']);
+
       showStatus('APIキーが正常に保存されました', 'success');
 
       // 保存後にテストボタンを有効化
