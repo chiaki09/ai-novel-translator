@@ -10,6 +10,9 @@ class NovelTranslator {
     this.currentElements = []; // 現在翻訳中の要素配列
     this.currentTexts = []; // 元テキスト配列
 
+    // ストリーミング翻訳用の状態管理
+    this.streamingResults = new Map(); // index -> accumulated text
+
     // DOM selectors in priority order (Web小説サイト向けに拡張)
     this.contentSelectors = [
       // 特定のWeb小説サイト用
@@ -88,6 +91,11 @@ class NovelTranslator {
 
         case 'translationProgress':
           this.applyProgressTranslation(message.startIndex, message.translations);
+          sendResponse({ success: true });
+          break;
+
+        case 'streamChunk':
+          this.handleStreamChunk(message.index, message.chunk, message.done);
           sendResponse({ success: true });
           break;
 
@@ -442,6 +450,7 @@ class NovelTranslator {
     this.translatedElements.clear();
     this.currentElements = []; // 部分翻訳用状態もクリア
     this.currentTexts = [];
+    this.streamingResults.clear(); // ストリーミング状態もクリア
     this.isTranslated = false;
     console.log('Fast restore complete');
   }
@@ -485,6 +494,54 @@ class NovelTranslator {
     const translatedCount = Array.from(this.translatedElements.keys()).length;
     if (translatedCount === this.currentElements.length) {
       console.log(`🎉 All ${translatedCount} paragraphs translated and applied!`);
+      this.isTranslated = true;
+      this.isTranslating = false;
+    }
+  }
+
+  // ストリーミングチャンク処理
+  handleStreamChunk(index, chunk, done) {
+    if (!this.currentElements || index >= this.currentElements.length) {
+      return;
+    }
+
+    const element = this.currentElements[index];
+
+    // 初回チャンクの場合、元のテキストを保存
+    if (!this.translatedElements.has(element)) {
+      this.translatedElements.set(element, element.textContent);
+    }
+
+    if (!done && chunk) {
+      // チャンクを蓄積
+      const currentText = this.streamingResults.get(index) || '';
+      const newText = currentText + chunk;
+      this.streamingResults.set(index, newText);
+
+      // リアルタイム表示
+      this.applySimpleTranslation(element, newText);
+    } else if (done) {
+      // 翻訳完了
+      const finalText = this.streamingResults.get(index) || chunk || '[翻訳失敗]';
+      this.streamingResults.delete(index);
+
+      // 最終テキストを適用
+      this.applySimpleTranslation(element, finalText);
+
+      // 全体の完了確認
+      this.checkTranslationCompletion();
+    }
+  }
+
+  // 翻訳完了チェック
+  checkTranslationCompletion() {
+    if (!this.currentElements) return;
+
+    const translatedCount = Array.from(this.translatedElements.keys()).length;
+    const streamingCount = this.streamingResults.size;
+
+    if (translatedCount === this.currentElements.length && streamingCount === 0) {
+      console.log(`🎉 All ${translatedCount} paragraphs streaming translation completed!`);
       this.isTranslated = true;
       this.isTranslating = false;
     }
